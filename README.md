@@ -1,148 +1,137 @@
 # SmolVLA FP16 Hardware Benchmark
 
-本项目用于测试 SmolVLA 在不同硬件平台上的推理性能，重点比较 NVIDIA Jetson Orin NX 与桌面端/服务器端 GPU 在相同输入、相同模型和相同推理流程下的差异。
+本项目用于测试 SmolVLA 在不同硬件平台上的推理性能，重点比较 NVIDIA Jetson Orin NX 与桌面端/服务器端 GPU 在完全相同输入和推理流程下的差异。
 
-项目基于 Hugging Face LeRobot 修改，目标不是提供完整的机器人训练框架，而是提供一套可以复现的 SmolVLA FP16 推理流程。模型 checkpoint、数据集和测试输入不会提交到本仓库。
+项目基于 Hugging Face LeRobot 修改，仅保留实验所需代码和环境信息。模型 checkpoint 与完整数据集不包含在仓库中；仓库已经提供 10 条可直接重放的 FP16 模型输入和参考输出。
 
-## 主要特性
+## 特性
 
-- SmolVLA 推理链路强制使用 FP16，不使用 BF16、FP32 或 TF32。
-- 默认使用全零初始 latent，完全跳过高斯随机采样。
-- 支持将预处理后的模型输入、固定 noise 和参考输出保存到单个文件。
-- 支持在另一台机器上直接重放输入，并进行逐 bit 输出检查。
+- SmolVLA 推理链路使用 FP16，不使用 BF16、FP32 或 TF32。
+- 使用固定的全零 FP16 latent，不进行高斯采样。
+- 10 条测试样本分别来自 LIBERO 数据集的 10 个 task。
+- 每条样本包含预处理后的模型输入、noise、normalized action 和反归一化 action。
 - 启用 PyTorch 确定性算法，关闭 cuDNN benchmark 和 TF32。
-- CUDA 不可用时直接终止，不静默回退到 CPU。
+- 重放时执行 bit-exact 检查，并输出每条样本的 GPU 推理延迟。
+- CUDA 不可用时直接终止，不回退到 CPU。
 
-## 测试目的
+## 下载模型和数据集
 
-建议在所有设备上使用同一份：
+SmolVLA checkpoint：
 
-- SmolVLA checkpoint
-- 重放输入文件
-- PyTorch、CUDA、Transformers 和 LeRobot 代码版本
-- 推理参数与功耗模式
+- [lerobot/smolvla_base](https://huggingface.co/lerobot/smolvla_base)
 
-这样可以尽量将差异限定在硬件、驱动和底层 CUDA kernel 上。不同 GPU 架构或软件栈仍可能产生数值末位差异，因此重放流程会同时保存参考输出并检查是否 bit-exact。
+```bash
+hf download lerobot/smolvla_base --local-dir ./smolvla_base
+```
+
+LIBERO 数据集（下载版本为 LeRobot v2.1）：
+
+- [IPEC-COMMUNITY/libero_goal_no_noops_1.0.0_lerobot](https://huggingface.co/datasets/IPEC-COMMUNITY/libero_goal_no_noops_1.0.0_lerobot)
+
+```bash
+hf download \
+  --repo-type dataset \
+  IPEC-COMMUNITY/libero_goal_no_noops_1.0.0_lerobot \
+  --local-dir ./libero_goal_no_noops_1.0.0_lerobot
+```
+
+只运行仓库中已经准备好的 10 条 benchmark 时不需要下载完整数据集，只需要 checkpoint。
 
 ## 环境
 
-已验证环境名称为 `lerobot_orin`，需要：
-
-- Linux
-- Python 3.10
-- NVIDIA CUDA GPU
-- 支持 CUDA 的 PyTorch
-- LeRobot 的 SmolVLA 依赖
-
-按照本仓库依赖安装：
+当前验证环境为 Jetson/JetPack CUDA 12.6、Python 3.10。完整环境快照位于 [`requirements-lerobot-orin.txt`](requirements-lerobot-orin.txt)，其中包含当前 Orin 环境使用的 NVIDIA PyTorch wheel 地址。
 
 ```bash
 conda create -n lerobot_orin python=3.10 -y
 conda activate lerobot_orin
-pip install -e ".[smolvla]"
+pip install -r requirements-lerobot-orin.txt
+pip install -e . --no-deps
 ```
 
-Jetson Orin NX 上的 PyTorch 应使用与 JetPack/CUDA 对应的 NVIDIA Jetson 版本，不能直接假设 PyPI wheel 与设备兼容。
+该 requirements 是当前 Orin 环境的精确导出，不保证其中的 AArch64/Jetson PyTorch wheel 能安装在 x86_64 机器上。其他硬件应先安装与自身 CUDA 和架构对应的 PyTorch，再安装其余依赖，并记录实际版本。
 
-## 文件准备
+## 运行 10 条 FP16 Benchmark
 
-默认目录结构如下：
+仓库中的 [`benchmark/smolvla_fp16_10_cases.pt`](benchmark/smolvla_fp16_10_cases.pt) 已包含 10 条预处理后的输入与参考输出。
+
+```bash
+conda run -n lerobot_orin python benchmark.py \
+  --model ./smolvla_base \
+  --cases ./benchmark/smolvla_fp16_10_cases.pt \
+  --warmup 1
+```
+
+程序会：
+
+1. 检查模型、输入和 noise 是否为 FP16。
+2. 预热模型。
+3. 使用 CUDA 同步计时，逐条输出推理延迟。
+4. 将每条 normalized action 与仓库参考输出进行逐 bit 比较。
+5. 检查反归一化输出仍为 FP16。
+
+正常结束时会显示：
 
 ```text
-lerobot/
-├── smolvla_base/                         # checkpoint，不上传
-├── libero_goal_no_noops_1.0.0_lerobot/  # 数据集，不上传
-├── src/lerobot/
-└── test.py
+All 10 FP16 outputs are bit-exact.
 ```
 
-也可以通过命令行参数指定其他路径：
+不同 GPU 架构、驱动或 CUDA/PyTorch 版本可能使用不同 kernel，因此即使输入完全相同也可能出现末位差异。发生差异时程序会报告最大绝对误差。
+
+## 数据集 v2.1 → v3.0 转换
+
+下载的数据集是 LeRobot v2.1，本项目推理使用的是转换后的 v3.0 数据集。仓库提供了可复现脚本：
 
 ```bash
-python test.py \
-  --model /path/to/smolvla_base \
-  --dataset-root /path/to/dataset \
-  --repo-id libero_goal_no_noops_1.0.0_lerobot \
-  --frame-index 0
+bash scripts/convert_libero_v21_to_v30.sh "$PWD"
 ```
 
-## 首次推理与保存输入
+脚本执行以下流程：
 
-默认使用全零 latent，因此推理过程中不存在高斯采样：
+1. 检查本地 v2.1 数据集目录。
+2. 创建 `libero_goal_no_noops_1.0.0_lerobot_v21_backup` 完整备份。
+3. 调用 LeRobot 官方 `convert_dataset_v21_to_v30` 转换器。
+4. 使用 `--push-to-hub=false`，仅在本地转换，不修改上游数据集。
 
-```bash
-conda run -n lerobot_orin python test.py \
-  --input-file smolvla_replay_input.pt
-```
-
-保存文件包含：
-
-- 预处理、归一化和 tokenization 后的模型输入
-- FP16 初始 noise/latent
-- 本次推理得到的参考 normalized action
-
-如果测试需要高斯分布的初始 latent，可以在一台机器上用固定 seed 生成一次，再将保存的输入复制到其他机器：
-
-```bash
-conda run -n lerobot_orin python test.py \
-  --seeded-noise \
-  --seed 0 \
-  --input-file smolvla_replay_input.pt
-```
-
-## 在另一台机器重放
-
-将相同 checkpoint 和 `smolvla_replay_input.pt` 放到目标机器，然后执行：
-
-```bash
-conda run -n lerobot_orin python test.py \
-  --model /path/to/smolvla_base \
-  --replay \
-  --input-file /path/to/smolvla_replay_input.pt
-```
-
-输出完全一致时会显示：
+转换后的数据集仍位于：
 
 ```text
-Replay verification: bit-exact output match
+libero_goal_no_noops_1.0.0_lerobot/
 ```
 
-如果不一致，程序会报错并打印最大绝对误差。这可以帮助区分硬件/软件栈造成的数值差异与输入预处理差异。
+其 `meta/info.json` 中的 `codebase_version` 应为 `v3.0`。原始 v2.1 数据保存在备份目录中。
 
-## 性能测试建议
+用于维护 benchmark 数据的生成脚本也保留在 [`scripts/build_fp16_benchmark_cases.py`](scripts/build_fp16_benchmark_cases.py)，但普通测试者无需重新生成输入。
 
-为了得到可比较的结果：
+## Benchmark 样本
 
-1. 先运行一次推理完成模型加载和 CUDA warm-up。
-2. 使用 `--replay`，避免把数据解码和预处理时间计入模型推理。
-3. 每个平台重复多次，分别记录延迟、吞吐量、显存、功耗和温度。
-4. Orin NX 上固定 JetPack、功耗模式和时钟策略，并记录 `tegrastats` 输出。
-5. 桌面 GPU 上记录 GPU 型号、驱动、CUDA、PyTorch 版本和功耗上限。
-6. 同步 CUDA 后再计时，否则 CPU 侧计时不能代表真实 GPU 延迟。
+固定数据集索引如下，每个 task 取首条帧：
 
-## 与官方 LeRobot 的主要差异
+| Task | Dataset index | Episode | Frame |
+|---:|---:|---:|---:|
+| 0 | 0 | 0 | 0 |
+| 1 | 112 | 1 | 0 |
+| 2 | 417 | 3 | 0 |
+| 3 | 812 | 5 | 0 |
+| 4 | 924 | 6 | 0 |
+| 5 | 1014 | 7 | 0 |
+| 6 | 1407 | 9 | 0 |
+| 7 | 1827 | 13 | 0 |
+| 8 | 2451 | 19 | 0 |
+| 9 | 2551 | 20 | 0 |
 
-核心改动位于：
+## 关键文件
 
-- `src/lerobot/policies/smolvla/modeling_smolvla.py`
-- `src/lerobot/policies/smolvla/smolvlm_with_expert.py`
-- `test.py`
+- `benchmark.py`：直接运行 10 条硬件 benchmark。
+- `benchmark/smolvla_fp16_10_cases.pt`：FP16 输入和参考输出。
+- `requirements-lerobot-orin.txt`：当前 Orin 环境精确依赖快照。
+- `scripts/convert_libero_v21_to_v30.sh`：官方 v2.1 → v3.0 转换流程。
+- `scripts/build_fp16_benchmark_cases.py`：benchmark 产物维护脚本。
+- `src/lerobot/policies/smolvla/`：FP16 SmolVLA 实现。
 
-改动包括 VLM 权重、RoPE、attention、时间编码、动作头、预处理和后处理的 FP16 化，以及确定性输入保存与重放。
+## 测试记录建议
 
-上游项目：[huggingface/lerobot](https://github.com/huggingface/lerobot)
+对比硬件时应记录 GPU/SoC 型号、功耗模式、时钟策略、温度、驱动、CUDA、PyTorch、Transformers、显存峰值和 10 条样本延迟。Orin NX 建议同时保存 `tegrastats` 输出。
 
-## 不包含的内容
+## 上游与 License
 
-以下内容已通过 `.gitignore` 排除：
-
-- 模型 checkpoint
-- LIBERO 数据集及其备份
-- 推理重放输入文件
-- 本地输出、缓存和日志
-
-请确认你有权使用和分发自行下载的模型与数据集。
-
-## License
-
-本项目保留上游 LeRobot 的 Apache License 2.0。详见 [LICENSE](LICENSE)。
+本项目基于 [huggingface/lerobot](https://github.com/huggingface/lerobot)，保留 Apache License 2.0，详见 [LICENSE](LICENSE)。模型与数据集遵循各自页面声明的许可协议。
