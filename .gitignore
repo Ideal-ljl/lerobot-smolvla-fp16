@@ -167,6 +167,13 @@ wandb/
 data/
 outputs/
 
+# Local SmolVLA checkpoints, datasets, and deterministic replay artifacts
+/smolvla_base/
+/libero_goal_no_noops_1.0.0_lerobot/
+/libero_goal_no_noops_1.0.0_lerobot_old/
+/libero_goal_no_noops_1.0.0_lerobot_v21_backup/
+/smolvla_replay_input.pt
+
 # Translations
 *.mo
 *.pot

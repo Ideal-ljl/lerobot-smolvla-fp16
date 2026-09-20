@@ -32,11 +32,9 @@ def apply_rope(x, positions, max_wavelength=10_000):
     d_half = x.shape[-1] // 2
     device = x.device
     dtype = x.dtype
-    x = x.to(torch.float32)
-
-    freq_exponents = (2.0 / x.shape[-1]) * torch.arange(d_half, dtype=torch.float32, device=device)
+    freq_exponents = (2.0 / x.shape[-1]) * torch.arange(d_half, dtype=dtype, device=device)
     timescale = max_wavelength**freq_exponents
-    radians = positions[..., None].to(torch.float32) / timescale[None, None, :].to(torch.float32)
+    radians = positions[..., None].to(dtype) / timescale[None, None, :]
 
     radians = radians[..., None, :]
 
@@ -77,7 +75,7 @@ class SmolVLMWithExpertModel(nn.Module):
             print(f"Loading  {model_id} weights ...")
             self.vlm = AutoModelForImageTextToText.from_pretrained(
                 model_id,
-                torch_dtype="bfloat16",
+                dtype=torch.float16,
                 low_cpu_mem_usage=True,
             )
             config = self.vlm.config
@@ -524,17 +522,12 @@ class SmolVLMWithExpertModel(nn.Module):
             batch_size, sequence_length, num_key_value_heads * num_key_value_groups, head_dim
         )
 
-        # Attention here is upcasted to float32 to match the original eager implementation.
-        query_states = query_states.to(dtype=torch.float32)
-        key_states = key_states.to(dtype=torch.float32)
-
         query_states = query_states.transpose(1, 2)
         key_states = key_states.transpose(1, 2)
 
         att_weights = torch.matmul(query_states, key_states.transpose(2, 3))
         att_weights *= head_dim**-0.5
 
-        att_weights = att_weights.to(dtype=torch.float32)
         big_neg = torch.finfo(att_weights.dtype).min  # -2.3819763e38  # See gemma/modules.py
         masked_att_weights = torch.where(attention_mask[:, None, :, :], att_weights, big_neg)
         probs = nn.functional.softmax(masked_att_weights, dim=-1)

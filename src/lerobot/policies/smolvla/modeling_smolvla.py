@@ -88,7 +88,7 @@ def create_sinusoidal_pos_embedding(
     if time.ndim != 1:
         raise ValueError("The time tensor is expected to be of shape `(batch_size, )`.")
 
-    dtype = get_safe_dtype(torch.float64, device.type)
+    dtype = get_safe_dtype(torch.float16, device.type)
     fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
     period = min_period * (max_period / min_period) ** fraction
 
@@ -595,7 +595,6 @@ class VLAFlowMatching(nn.Module):
 
         # Compile model if requested
         if config.compile_model:
-            torch.set_float32_matmul_precision("high")
             self.sample_actions = torch.compile(self.sample_actions, mode=config.compile_mode)
             self.forward = torch.compile(self.forward, mode=config.compile_mode)
 
@@ -611,14 +610,14 @@ class VLAFlowMatching(nn.Module):
             mean=0.0,
             std=1.0,
             size=shape,
-            dtype=torch.float32,
+            dtype=torch.float16,
             device=device,
         )
         return noise
 
     def sample_time(self, bsize, device):
         beta_dist = torch.distributions.Beta(concentration1=1.5, concentration0=1.0)
-        time_beta = beta_dist.sample((bsize,)).to(device=device, dtype=torch.float32)
+        time_beta = beta_dist.sample((bsize,)).to(device=device, dtype=torch.float16)
         time = time_beta * 0.999 + 0.001
         return time
 
@@ -791,8 +790,6 @@ class VLAFlowMatching(nn.Module):
             fill_kv_cache=False,
         )
         suffix_out = suffix_out[:, -self.config.chunk_size :]
-        # Original openpi code, upcast attention output
-        suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
         losses = F.mse_loss(u_t, v_t, reduction="none")
         return losses
@@ -835,7 +832,7 @@ class VLAFlowMatching(nn.Module):
         x_t = noise
         for step in range(num_steps):
             time = 1.0 + step * dt
-            time_tensor = torch.tensor(time, dtype=torch.float32, device=device).expand(bsize)
+            time_tensor = torch.tensor(time, dtype=torch.float16, device=device).expand(bsize)
 
             def denoise_step_partial_call(input_x_t, current_timestep=time_tensor):
                 return self.denoise_step(
@@ -899,6 +896,5 @@ class VLAFlowMatching(nn.Module):
         )
         suffix_out = outputs_embeds[1]
         suffix_out = suffix_out[:, -self.config.chunk_size :]
-        suffix_out = suffix_out.to(dtype=torch.float32)
         v_t = self.action_out_proj(suffix_out)
         return v_t
