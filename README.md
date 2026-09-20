@@ -1,159 +1,148 @@
-<p align="center">
-  <img alt="LeRobot, Hugging Face Robotics Library" src="./media/readme/lerobot-logo-thumbnail.png" width="100%">
-</p>
+# SmolVLA FP16 Hardware Benchmark
 
-<div align="center">
+本项目用于测试 SmolVLA 在不同硬件平台上的推理性能，重点比较 NVIDIA Jetson Orin NX 与桌面端/服务器端 GPU 在相同输入、相同模型和相同推理流程下的差异。
 
-[![Tests](https://github.com/huggingface/lerobot/actions/workflows/nightly.yml/badge.svg?branch=main)](https://github.com/huggingface/lerobot/actions/workflows/nightly.yml?query=branch%3Amain)
-[![Python versions](https://img.shields.io/pypi/pyversions/lerobot)](https://www.python.org/downloads/)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/huggingface/lerobot/blob/main/LICENSE)
-[![Status](https://img.shields.io/pypi/status/lerobot)](https://pypi.org/project/lerobot/)
-[![Version](https://img.shields.io/pypi/v/lerobot)](https://pypi.org/project/lerobot/)
-[![Contributor Covenant](https://img.shields.io/badge/Contributor%20Covenant-v2.1-ff69b4.svg)](https://github.com/huggingface/lerobot/blob/main/CODE_OF_CONDUCT.md)
-[![Discord](https://img.shields.io/badge/Discord-Join_Us-5865F2?style=flat&logo=discord&logoColor=white)](https://discord.gg/q8Dzzpym3f)
+项目基于 Hugging Face LeRobot 修改，目标不是提供完整的机器人训练框架，而是提供一套可以复现的 SmolVLA FP16 推理流程。模型 checkpoint、数据集和测试输入不会提交到本仓库。
 
-</div>
+## 主要特性
 
-**LeRobot** aims to provide models, datasets, and tools for real-world robotics in PyTorch. The goal is to lower the barrier to entry so that everyone can contribute to and benefit from shared datasets and pretrained models.
+- SmolVLA 推理链路强制使用 FP16，不使用 BF16、FP32 或 TF32。
+- 默认使用全零初始 latent，完全跳过高斯随机采样。
+- 支持将预处理后的模型输入、固定 noise 和参考输出保存到单个文件。
+- 支持在另一台机器上直接重放输入，并进行逐 bit 输出检查。
+- 启用 PyTorch 确定性算法，关闭 cuDNN benchmark 和 TF32。
+- CUDA 不可用时直接终止，不静默回退到 CPU。
 
-🤗 A hardware-agnostic, Python-native interface that standardizes control across diverse platforms, from low-cost arms (SO-100) to humanoids.
+## 测试目的
 
-🤗 A standardized, scalable LeRobotDataset format (Parquet + MP4 or images) hosted on the Hugging Face Hub, enabling efficient storage, streaming and visualization of massive robotic datasets.
+建议在所有设备上使用同一份：
 
-🤗 State-of-the-art policies that have been shown to transfer to the real-world ready for training and deployment.
+- SmolVLA checkpoint
+- 重放输入文件
+- PyTorch、CUDA、Transformers 和 LeRobot 代码版本
+- 推理参数与功耗模式
 
-🤗 Comprehensive support for the open-source ecosystem to democratize physical AI.
+这样可以尽量将差异限定在硬件、驱动和底层 CUDA kernel 上。不同 GPU 架构或软件栈仍可能产生数值末位差异，因此重放流程会同时保存参考输出并检查是否 bit-exact。
 
-## Quick Start
+## 环境
 
-LeRobot can be installed directly from PyPI.
+已验证环境名称为 `lerobot_orin`，需要：
 
-```bash
-pip install lerobot
-lerobot-info
-```
+- Linux
+- Python 3.10
+- NVIDIA CUDA GPU
+- 支持 CUDA 的 PyTorch
+- LeRobot 的 SmolVLA 依赖
 
-> [!IMPORTANT]
-> For detailed installation guide, please see the [Installation Documentation](https://huggingface.co/docs/lerobot/installation).
-
-## Robots & Control
-
-<div align="center">
-  <img src="./media/readme/robots_control_video.webp" width="640px" alt="Reachy 2 Demo">
-</div>
-
-LeRobot provides a unified `Robot` class interface that decouples control logic from hardware specifics. It supports a wide range of robots and teleoperation devices.
-
-```python
-from lerobot.robots.myrobot import MyRobot
-
-# Connect to a robot
-robot = MyRobot(config=...)
-robot.connect()
-
-# Read observation and send action
-obs = robot.get_observation()
-action = model.select_action(obs)
-robot.send_action(action)
-```
-
-**Supported Hardware:** SO100, LeKiwi, Koch, HopeJR, OMX, EarthRover, Reachy2, Gamepads, Keyboards, Phones, OpenARM, Unitree G1.
-
-While these devices are natively integrated into the LeRobot codebase, the library is designed to be extensible. You can easily implement the Robot interface to utilize LeRobot's data collection, training, and visualization tools for your own custom robot.
-
-For detailed hardware setup guides, see the [Hardware Documentation](https://huggingface.co/docs/lerobot/integrate_hardware).
-
-## LeRobot Dataset
-
-To solve the data fragmentation problem in robotics, we utilize the **LeRobotDataset** format.
-
-- **Structure:** Synchronized MP4 videos (or images) for vision and Parquet files for state/action data.
-- **HF Hub Integration:** Explore thousands of robotics datasets on the [Hugging Face Hub](https://huggingface.co/lerobot).
-- **Tools:** Seamlessly delete episodes, split by indices/fractions, add/remove features, and merge multiple datasets.
-
-```python
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
-
-# Load a dataset from the Hub
-dataset = LeRobotDataset("lerobot/aloha_mobile_cabinet")
-
-# Access data (automatically handles video decoding)
-episode_index=0
-print(f"{dataset[episode_index]['action'].shape=}\n")
-```
-
-Learn more about it in the [LeRobotDataset Documentation](https://huggingface.co/docs/lerobot/lerobot-dataset-v3)
-
-## SoTA Models
-
-LeRobot implements state-of-the-art policies in pure PyTorch, covering Imitation Learning, Reinforcement Learning, and Vision-Language-Action (VLA) models, with more coming soon. It also provides you with the tools to instrument and inspect your training process.
-
-<p align="center">
-  <img alt="Gr00t Architecture" src="./media/readme/VLA_architecture.jpg" width="640px">
-</p>
-
-Training a policy is as simple as running a script configuration:
+按照本仓库依赖安装：
 
 ```bash
-lerobot-train \
-  --policy=act \
-  --dataset.repo_id=lerobot/aloha_mobile_cabinet
+conda create -n lerobot_orin python=3.10 -y
+conda activate lerobot_orin
+pip install -e ".[smolvla]"
 ```
 
-| Category                   | Models                                                                                                                                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Imitation Learning**     | [ACT](./docs/source/policy_act_README.md), [Diffusion](./docs/source/policy_diffusion_README.md), [VQ-BeT](./docs/source/policy_vqbet_README.md)                                                             |
-| **Reinforcement Learning** | [HIL-SERL](./docs/source/hilserl.mdx), [TDMPC](./docs/source/policy_tdmpc_README.md) & QC-FQL (coming soon)                                                                                                  |
-| **VLAs Models**            | [Pi0Fast](./docs/source/pi0fast.mdx), [Pi0.5](./docs/source/pi05.mdx), [GR00T N1.5](./docs/source/policy_groot_README.md), [SmolVLA](./docs/source/policy_smolvla_README.md), [XVLA](./docs/source/xvla.mdx) |
+Jetson Orin NX 上的 PyTorch 应使用与 JetPack/CUDA 对应的 NVIDIA Jetson 版本，不能直接假设 PyPI wheel 与设备兼容。
 
-Similarly to the hardware, you can easily implement your own policy & leverage LeRobot's data collection, training, and visualization tools, and share your model to the HF Hub
+## 文件准备
 
-For detailed policy setup guides, see the [Policy Documentation](https://huggingface.co/docs/lerobot/bring_your_own_policies).
+默认目录结构如下：
 
-## Inference & Evaluation
+```text
+lerobot/
+├── smolvla_base/                         # checkpoint，不上传
+├── libero_goal_no_noops_1.0.0_lerobot/  # 数据集，不上传
+├── src/lerobot/
+└── test.py
+```
 
-Evaluate your policies in simulation or on real hardware using the unified evaluation script. LeRobot supports standard benchmarks like **LIBERO**, **MetaWorld** and more to come.
+也可以通过命令行参数指定其他路径：
 
 ```bash
-# Evaluate a policy on the LIBERO benchmark
-lerobot-eval \
-  --policy.path=lerobot/pi0_libero_finetuned \
-  --env.type=libero \
-  --env.task=libero_object \
-  --eval.n_episodes=10
+python test.py \
+  --model /path/to/smolvla_base \
+  --dataset-root /path/to/dataset \
+  --repo-id libero_goal_no_noops_1.0.0_lerobot \
+  --frame-index 0
 ```
 
-Learn how to implement your own simulation environment or benchmark and distribute it from the HF Hub by following the [EnvHub Documentation](https://huggingface.co/docs/lerobot/envhub)
+## 首次推理与保存输入
 
-## Resources
+默认使用全零 latent，因此推理过程中不存在高斯采样：
 
-- **[Documentation](https://huggingface.co/docs/lerobot/index):** The complete guide to tutorials & API.
-- **[Chinese Tutorials: LeRobot+SO-ARM101中文教程-同济子豪兄](https://zihao-ai.feishu.cn/wiki/space/7589642043471924447)** Detailed doc for assembling, teleoperate, dataset, train, deploy. Verified by Seed Studio and 5 global hackathon players.
-- **[Discord](https://discord.gg/q8Dzzpym3f):** Join the `LeRobot` server to discuss with the community.
-- **[X](https://x.com/LeRobotHF):** Follow us on X to stay up-to-date with the latest developments.
-- **[Robot Learning Tutorial](https://huggingface.co/spaces/lerobot/robot-learning-tutorial):** A free, hands-on course to learn robot learning using LeRobot.
-
-## Citation
-
-If you use LeRobot in your research, please cite:
-
-```bibtex
-@misc{cadene2024lerobot,
-    author = {Cadene, Remi and Alibert, Simon and Soare, Alexander and Gallouedec, Quentin and Zouitine, Adil and Palma, Steven and Kooijmans, Pepijn and Aractingi, Michel and Shukor, Mustafa and Aubakirova, Dana and Russi, Martino and Capuano, Francesco and Pascal, Caroline and Choghari, Jade and Moss, Jess and Wolf, Thomas},
-    title = {LeRobot: State-of-the-art Machine Learning for Real-World Robotics in Pytorch},
-    howpublished = "\url{https://github.com/huggingface/lerobot}",
-    year = {2024}
-}
+```bash
+conda run -n lerobot_orin python test.py \
+  --input-file smolvla_replay_input.pt
 ```
 
-## Contribute
+保存文件包含：
 
-We welcome contributions from everyone in the community! To get started, please read our [CONTRIBUTING.md](./CONTRIBUTING.md) guide. Whether you're adding a new feature, improving documentation, or fixing a bug, your help and feedback are invaluable. We're incredibly excited about the future of open-source robotics and can't wait to work with you on what's next—thank you for your support!
+- 预处理、归一化和 tokenization 后的模型输入
+- FP16 初始 noise/latent
+- 本次推理得到的参考 normalized action
 
-<p align="center">
-  <img alt="SO101 Video" src="./media/readme/so100_video.webp" width="640px">
-</p>
+如果测试需要高斯分布的初始 latent，可以在一台机器上用固定 seed 生成一次，再将保存的输入复制到其他机器：
 
-<div align="center">
-<sub>Built by the <a href="https://huggingface.co/lerobot">LeRobot</a> team at <a href="https://huggingface.co">Hugging Face</a> with ❤️</sub>
-</div>
+```bash
+conda run -n lerobot_orin python test.py \
+  --seeded-noise \
+  --seed 0 \
+  --input-file smolvla_replay_input.pt
+```
+
+## 在另一台机器重放
+
+将相同 checkpoint 和 `smolvla_replay_input.pt` 放到目标机器，然后执行：
+
+```bash
+conda run -n lerobot_orin python test.py \
+  --model /path/to/smolvla_base \
+  --replay \
+  --input-file /path/to/smolvla_replay_input.pt
+```
+
+输出完全一致时会显示：
+
+```text
+Replay verification: bit-exact output match
+```
+
+如果不一致，程序会报错并打印最大绝对误差。这可以帮助区分硬件/软件栈造成的数值差异与输入预处理差异。
+
+## 性能测试建议
+
+为了得到可比较的结果：
+
+1. 先运行一次推理完成模型加载和 CUDA warm-up。
+2. 使用 `--replay`，避免把数据解码和预处理时间计入模型推理。
+3. 每个平台重复多次，分别记录延迟、吞吐量、显存、功耗和温度。
+4. Orin NX 上固定 JetPack、功耗模式和时钟策略，并记录 `tegrastats` 输出。
+5. 桌面 GPU 上记录 GPU 型号、驱动、CUDA、PyTorch 版本和功耗上限。
+6. 同步 CUDA 后再计时，否则 CPU 侧计时不能代表真实 GPU 延迟。
+
+## 与官方 LeRobot 的主要差异
+
+核心改动位于：
+
+- `src/lerobot/policies/smolvla/modeling_smolvla.py`
+- `src/lerobot/policies/smolvla/smolvlm_with_expert.py`
+- `test.py`
+
+改动包括 VLM 权重、RoPE、attention、时间编码、动作头、预处理和后处理的 FP16 化，以及确定性输入保存与重放。
+
+上游项目：[huggingface/lerobot](https://github.com/huggingface/lerobot)
+
+## 不包含的内容
+
+以下内容已通过 `.gitignore` 排除：
+
+- 模型 checkpoint
+- LIBERO 数据集及其备份
+- 推理重放输入文件
+- 本地输出、缓存和日志
+
+请确认你有权使用和分发自行下载的模型与数据集。
+
+## License
+
+本项目保留上游 LeRobot 的 Apache License 2.0。详见 [LICENSE](LICENSE)。
